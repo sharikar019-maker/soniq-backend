@@ -2,8 +2,7 @@ import express from "express";
 import {
   getCart,
   addToCart,
-  replaceCartItem,
-  updateCartItem,
+  updateCartItem,   // ← correct name
   removeFromCart,
   clearCart,
 } from "../controllers/cartController.js";
@@ -19,8 +18,7 @@ router.route("/")
   .delete(clearCart);
 
 router.route("/:productId")
-  .put(replaceCartItem)    
-  .patch(updateCartItem)   
-  .delete(removeFromCart); 
+  .put(updateCartItem)
+  .delete(removeFromCart);
 
 export default router;

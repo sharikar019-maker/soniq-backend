@@ -12,6 +12,11 @@ const cartItemSchema = new mongoose.Schema({
     min: [1, "Quantity must be at least 1"],
     default: 1,
   },
+  price: {               // ✅ store price at time of adding
+    type: Number,
+    required: true,
+    default: 0,
+  },
 });
 
 const cartSchema = new mongoose.Schema(
@@ -20,7 +25,7 @@ const cartSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      unique: true, 
+      unique: true,
     },
     items: [cartItemSchema],
     totalPrice: {
@@ -28,20 +33,10 @@ const cartSchema = new mongoose.Schema(
       default: 0,
     },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true }
 );
 
-
-cartSchema.pre("save", async function () {
-  await this.populate("items.product");
-
-  this.totalPrice = this.items.reduce((total, item) => {
-    return total + item.product.price * item.quantity;
-  }, 0);
-});
+// ✅ REMOVED the broken pre("save") hook entirely
 
 const Cart = mongoose.model("Cart", cartSchema);
-
 export default Cart;
