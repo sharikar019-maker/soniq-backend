@@ -1,22 +1,31 @@
-import jwt from "jsonwebtoken";
+
 import User from "../models/User.js";
 import AppError from "../utils/AppError.js";
+import {
+  generateAccessToken,
+  generateRefreshToken,
+  hashToken,
+  refreshCookieOptions,
+} from "../utils/token.js";
 
 
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || "7d",
-  });
-};
+const sendTokenResponse = async (user, statusCode, res) => {
+  
+  const accessToken  = generateAccessToken(user._id);
+  const refreshToken = generateRefreshToken();
 
+  user.refreshToken       = hashToken(refreshToken);
+  user.refreshTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  await user.save({ validateBeforeSave: false });
 
-const sendTokenResponse = (user, statusCode, res) => {
-  const token = generateToken(user._id);
+  
+  res.cookie("refreshToken", refreshToken, refreshCookieOptions);
+
+  
   user.password = undefined;
-
   res.status(statusCode).json({
     success: true,
-    token,
+    accessToken, 
     data: user,
   });
 };
@@ -25,15 +34,11 @@ const sendTokenResponse = (user, statusCode, res) => {
 export const register = async (req, res, next) => {
   try {
     const { name, email, phone, password } = req.body;
-
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return next(new AppError("Email already registered", 400));
-    }
-
     const user = await User.create({ name, email, phone, password });
-    sendTokenResponse(user, 201, res);
+    await sendTokenResponse(user, 201, res);
   } catch (error) {
+    if (error.code === 11000) 
+      return next(new AppError("Email already registered", 400));
     next(error);
   }
 };
@@ -42,46 +47,87 @@ export const register = async (req, res, next) => {
 export const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
-
-    if (!email || !password) {
+    if (!email || !password)
       return next(new AppError("Please provide email and password", 400));
-    }
 
     const user = await User.findOne({ email }).select("+password");
-    if (!user) {
+    if (!user || !(await user.matchPassword(password)))
       return next(new AppError("Invalid email or password", 401));
-    }
 
-    const isMatch = await user.matchPassword(password);
-    if (!isMatch) {
-      return next(new AppError("Invalid email or password", 401));
-    }
-
-    sendTokenResponse(user, 200, res);
+    await sendTokenResponse(user, 200, res);
   } catch (error) {
     next(error);
   }
 };
 
 
-export const getMe = async (req, res, next) => {
+export const refreshAccessToken = async (req, res, next) => {
   try {
-    const user = await User.findById(req.user.id);
-    res.status(200).json({ success: true, data: user });
+    const incomingToken = req.cookies.refreshToken;
+    if (!incomingToken)
+      return next(new AppError("No refresh token", 401));
+
+  
+    const hashed = hashToken(incomingToken);
+    const user = await User.findOne({
+      refreshToken: hashed,
+      refreshTokenExpiry: { $gt: Date.now() }, 
+    });
+
+    if (!user) return next(new AppError("Invalid or expired refresh token", 401));
+
+    
+    const accessToken = generateAccessToken(user._id);
+    res.status(200).json({ success: true, accessToken });
   } catch (error) {
     next(error);
   }
 };
 
-// ─── GET /api/users ───────────────────────────────────────────────
-// @desc  Get all users (admin only)
-// @access Private/Admin
+export const logout = async (req, res, next) => {
+  try {
+    
+    await User.findByIdAndUpdate(req.user.id, {
+      refreshToken: null,
+      refreshTokenExpiry: null,
+    });
+
+    
+    res.clearCookie("refreshToken", refreshCookieOptions);
+    res.status(200).json({ success: true, message: "Logged out" });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+export const getMe = async (req, res) => {
+  
+  res.status(200).json({ success: true, data: req.user });
+};
+
+
 export const getAllUsers = async (req, res, next) => {
   try {
-    const users = await User.find().select("-password").sort({ createdAt: -1 });
+    const page  = parseInt(req.query.page)  || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const skip  = (page - 1) * limit;
+
+    const [users, total] = await Promise.all([
+      User.find()
+        .select("-password -refreshToken -refreshTokenExpiry")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(), 
+      User.countDocuments(),
+    ]);
+
     res.status(200).json({
       success: true,
-      count: users.length,
+      total,
+      currentPage: page,
+      totalPages: Math.ceil(total / limit),
       data: users,
     });
   } catch (error) {

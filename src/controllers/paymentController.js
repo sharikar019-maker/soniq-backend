@@ -1,40 +1,46 @@
 import crypto from "crypto";
-import getRazorpay from "../config/razorpay.js"; // ← same import
+import mongoose from "mongoose";
+import getRazorpay from "../config/razorpay.js";
 import Order from "../models/Order.js";
 import Cart from "../models/Cart.js";
 import AppError from "../utils/AppError.js";
+import { buildOrderFromCart } from "./orderController.js";
+
 
 export const createRazorpayOrder = async (req, res, next) => {
   try {
     const { amount } = req.body;
 
-    if (!amount || amount <= 0) {
+    
+    if (!amount || typeof amount !== "number" || amount <= 0)
       return next(new AppError("Valid amount is required", 400));
-    }
 
-    const razorpay = getRazorpay(); // ← call it here, not at top level
+    
+    if (!process.env.RAZORPAY_KEY_SECRET)
+      return next(new AppError("Payment configuration error", 500));
 
-    const options = {
-      amount: Math.round(amount * 100),
+    const razorpay = getRazorpay();
+
+    const razorpayOrder = await razorpay.orders.create({
+      amount:   Math.round(amount * 100), 
       currency: "INR",
-      receipt: `receipt_${Date.now()}`,
-    };
-
-    const razorpayOrder = await razorpay.orders.create(options);
+      receipt:  `receipt_${Date.now()}`,
+    });
 
     res.status(200).json({
       success: true,
       data: {
         razorpayOrderId: razorpayOrder.id,
-        amount: razorpayOrder.amount,
-        currency: razorpayOrder.currency,
-        keyId: process.env.RAZORPAY_KEY_ID,
+        amount:          razorpayOrder.amount,
+        currency:        razorpayOrder.currency,
+        keyId:           process.env.RAZORPAY_KEY_ID,
       },
     });
   } catch (error) {
     next(error);
   }
 };
+
 
 export const verifyPaymentAndCreateOrder = async (req, res, next) => {
   try {
@@ -45,61 +51,59 @@ export const verifyPaymentAndCreateOrder = async (req, res, next) => {
       shippingAddress,
     } = req.body;
 
-    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature)
       return next(new AppError("Payment details are incomplete", 400));
-    }
 
-    if (!shippingAddress) {
+    if (!shippingAddress || typeof shippingAddress !== "object")
       return next(new AppError("Shipping address is required", 400));
-    }
 
-    // verify signature
-    const body = razorpayOrderId + "|" + razorpayPaymentId;
+   
+    const { street, city, country } = shippingAddress;
+    if (!street || !city || !country)
+      return next(
+        new AppError(
+          "Shipping address must include street, city, and country",
+          400
+        )
+      );
+
+    
+    if (!process.env.RAZORPAY_KEY_SECRET)
+      return next(new AppError("Payment configuration error", 500));
+
+    
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-      .update(body)
+      .update(`${razorpayOrderId}|${razorpayPaymentId}`)
       .digest("hex");
 
-    if (expectedSignature !== razorpaySignature) {
+    if (expectedSignature !== razorpaySignature)
       return next(new AppError("Payment verification failed", 400));
-    }
 
-    const cart = await Cart.findOne({ user: req.user.id }).populate(
-      "items.product"
-    );
+    
+    const cartData = await buildOrderFromCart(req.user.id);
 
-    if (!cart || cart.items.length === 0) {
+    if (!cartData)
       return next(new AppError("Cart is empty", 400));
-    }
-
-    const orderItems = cart.items.map((item) => ({
-      product: item.product._id,
-      title: item.product.title,
-      image: item.product.image,
-      price: item.product.price,
-      quantity: item.quantity,
-    }));
-
-    const totalPrice = orderItems.reduce(
-      (total, item) => total + item.price * item.quantity,
-      0
-    );
 
     const order = await Order.create({
-      user: req.user.id,
-      items: orderItems,
+      user:              req.user.id,
+      items:             cartData.orderItems,
       shippingAddress,
-      paymentMethod: "online",
-      totalPrice,
-      isPaid: true,
-      paidAt: Date.now(),
+      paymentMethod:     "online",
+      totalPrice:        cartData.totalPrice,
+      isPaid:            true,
+      paidAt:            new Date(),
       razorpayOrderId,
       razorpayPaymentId,
       razorpaySignature,
     });
 
-    cart.items = [];
-    await cart.save();
+    
+    await Cart.updateOne(
+      { user: new mongoose.Types.ObjectId(req.user.id) },
+      { $set: { items: [], totalPrice: 0 } }
+    );
 
     res.status(201).json({ success: true, data: order });
   } catch (error) {
@@ -107,7 +111,8 @@ export const verifyPaymentAndCreateOrder = async (req, res, next) => {
   }
 };
 
-export const getRazorpayKey = async (req, res) => {
+
+export const getRazorpayKey = (req, res) => {
   res.status(200).json({
     success: true,
     keyId: process.env.RAZORPAY_KEY_ID,

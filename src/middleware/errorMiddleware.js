@@ -1,14 +1,13 @@
+
 const errorHandler = (err, req, res, next) => {
   let statusCode = err.statusCode || 500;
-  let message = err.message || "Internal Server Error";
+  let message    = err.message    || "Internal Server Error";
 
-  
   if (err.name === "CastError") {
     statusCode = 400;
     message = `Invalid ID format`;
   }
 
-  
   if (err.code === 11000) {
     statusCode = 400;
     const field = Object.keys(err.keyValue)[0];
@@ -32,7 +31,21 @@ const errorHandler = (err, req, res, next) => {
   
   if (err.name === "TokenExpiredError") {
     statusCode = 401;
-    message = "Token expired, please login again";
+    message = "Access token expired";
+  }
+
+  
+  if (err.name === "MulterError") {
+    statusCode = 400;
+    message = err.code === "LIMIT_FILE_SIZE"
+      ? "File too large"
+      : "File upload error";
+  }
+
+  
+  if (!err.isOperational && process.env.NODE_ENV === "production") {
+    statusCode = 500;
+    message = "Something went wrong";
   }
 
   res.status(statusCode).json({

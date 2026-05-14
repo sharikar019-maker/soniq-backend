@@ -2,7 +2,7 @@ import express from "express";
 import {
   getCart,
   addToCart,
-  updateCartItem,   // ← correct name
+  updateCartItem,   
   removeFromCart,
   clearCart,
 } from "../controllers/cartController.js";

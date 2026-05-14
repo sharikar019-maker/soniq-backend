@@ -1,55 +1,39 @@
+
 import jwt from "jsonwebtoken";
 import User from "../models/User.js";
-
+import AppError from "../utils/AppError.js";
 
 export const protect = async (req, res, next) => {
   try {
-    let token;
+    
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith("Bearer "))
+      return next(new AppError("Not authorized, no token", 401));
 
-  
-    if (
-      req.headers.authorization &&
-      req.headers.authorization.startsWith("Bearer")
-    ) {
-      token = req.headers.authorization.split(" ")[1];
-    }
+    const token = authHeader.split(" ")[1];
 
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        message: "Not authorized, no token provided",
-      });
-    }
+    const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
 
+    
+    const user = await User.findById(decoded.id)
+      .select("_id name email role")
+      .lean();
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (!user) return next(new AppError("User no longer exists", 401));
 
-
-    const user = await User.findById(decoded.id);
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "User no longer exists",
-      });
-    }
-
-    req.user = user; 
+    req.user = { ...user, id: user._id.toString() };
     next();
   } catch (error) {
-    return res.status(401).json({
-      success: false,
-      message: "Not authorized, token failed",
-    });
+    
+    if (error.name === "TokenExpiredError")
+      return next(new AppError("Access token expired", 401));
+
+    return next(new AppError("Not authorized, token failed", 401));
   }
 };
 
-
 export const authorizeAdmin = (req, res, next) => {
-  if (req.user.role !== "admin") {
-    return res.status(403).json({
-      success: false,
-      message: "Access denied, admin only",
-    });
-  }
+  if (req.user.role !== "admin")
+    return next(new AppError("Access denied, admin only", 403));
   next();
 };

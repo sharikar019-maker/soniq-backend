@@ -12,10 +12,10 @@ const cartItemSchema = new mongoose.Schema({
     min: [1, "Quantity must be at least 1"],
     default: 1,
   },
-  price: {               // ✅ store price at time of adding
+  price: {
     type: Number,
     required: true,
-    default: 0,
+    min: [0, "Price cannot be negative"], 
   },
 });
 
@@ -31,12 +31,11 @@ const cartSchema = new mongoose.Schema(
     totalPrice: {
       type: Number,
       default: 0,
+      min: [0, "Total price cannot be negative"], 
     },
   },
   { timestamps: true }
 );
-
-// ✅ REMOVED the broken pre("save") hook entirely
 
 const Cart = mongoose.model("Cart", cartSchema);
 export default Cart;

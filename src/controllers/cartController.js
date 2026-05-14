@@ -3,125 +3,312 @@ import Product from "../models/Product.js";
 import AppError from "../utils/AppError.js";
 import mongoose from "mongoose";
 
-// ✅ Helper — recalculate totalPrice from stored prices
-const calcTotal = (items) =>
-  items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+const getCartPipeline = (userId) => [
+  {
+    $match: { user: userId },
+  },
+  {
+    $lookup: {
+      from: "products",
+      localField: "items.product",
+      foreignField: "_id",
+      as: "productDocs",
+    },
+  },
+  {
+    $addFields: {
+      items: {
+        $map: {
+          input: "$items",
+          as: "item",
+          in: {
+            _id: "$$item._id",
+            quantity: "$$item.quantity",
+            price: "$$item.price",
+
+            product: {
+              $let: {
+                vars: {
+                  prod: {
+                    $arrayElemAt: [
+                      {
+                        $filter: {
+                          input: "$productDocs",
+                          as: "p",
+                          cond: {
+                            $eq: ["$$p._id", "$$item.product"],
+                          },
+                        },
+                      },
+                      0,
+                    ],
+                  },
+                },
+
+                in: {
+                  _id: "$$prod._id",
+                  title: "$$prod.title",
+                  image: "$$prod.image",
+                  category: "$$prod.category",
+                  price: "$$prod.price",
+                },
+              },
+            },
+          },
+        },
+      },
+
+      totalPrice: {
+        $sum: {
+          $map: {
+            input: "$items",
+            as: "item",
+            in: {
+              $multiply: ["$$item.price", "$$item.quantity"],
+            },
+          },
+        },
+      },
+    },
+  },
+  {
+    $project: {
+      productDocs: 0,
+    },
+  },
+];
+
+
 
 export const getCart = async (req, res, next) => {
   try {
-    const cart = await Cart.findOne({ user: req.user.id }).populate(
-      "items.product", "title price image category"
-    );
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+
+    const [cart] = await Cart.aggregate(getCartPipeline(userId));
 
     if (!cart) {
       return res.status(200).json({
         success: true,
-        data: { items: [], totalPrice: 0 },
+        data: {
+          items: [],
+          totalPrice: 0,
+        },
       });
     }
 
-    res.status(200).json({ success: true, data: cart });
+    res.status(200).json({
+      success: true,
+      data: cart,
+    });
   } catch (error) {
     next(error);
   }
 };
+
+
 
 export const addToCart = async (req, res, next) => {
   try {
     const { productId, quantity = 1 } = req.body;
 
+    
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      return next(new AppError("Quantity must be at least 1", 400));
+    }
+
     if (!mongoose.Types.ObjectId.isValid(productId)) {
       return next(new AppError("Invalid product ID", 400));
     }
 
-    const product = await Product.findById(productId);
-    if (!product) return next(new AppError("Product not found", 404));
+    const product = await Product.findById(productId)
+      .select("price title image category")
+      .lean();
 
-    let cart = await Cart.findOne({ user: req.user.id });
-    if (!cart) {
-      cart = new Cart({ user: req.user.id, items: [] });
+    if (!product) {
+      return next(new AppError("Product not found", 404));
     }
 
-    const existingItem = cart.items.find(
-      (item) => item.product.toString() === productId
-    );
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const pid = new mongoose.Types.ObjectId(productId);
+
+    const existingItem = await Cart.exists({
+      user: userId,
+      "items.product": pid,
+    });
 
     if (existingItem) {
-      existingItem.quantity += quantity;
+      await Cart.updateOne(
+        {
+          user: userId,
+          "items.product": pid,
+        },
+        {
+          $inc: {
+            "items.$.quantity": quantity,
+          },
+        }
+      );
     } else {
-      // ✅ store price alongside product reference
-      cart.items.push({ product: productId, quantity, price: product.price });
+      await Cart.findOneAndUpdate(
+        { user: userId },
+        {
+          $setOnInsert: {
+            user: userId,
+          },
+          $push: {
+            items: {
+              product: pid,
+              quantity,
+              price: product.price,
+            },
+          },
+        },
+        {
+          upsert: true,
+          new: true,
+        }
+      );
     }
 
-    // ✅ compute totalPrice before saving (no populate needed)
-    cart.totalPrice = calcTotal(cart.items);
-    await cart.save();
+    const [cart] = await Cart.aggregate(getCartPipeline(userId));
 
-    await cart.populate("items.product", "title price image category");
-    res.status(200).json({ success: true, data: cart });
+    
+    await Cart.updateOne(
+      { user: userId },
+      { $set: { totalPrice: cart.totalPrice } }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: cart,
+    });
   } catch (error) {
     next(error);
   }
 };
+
+
 
 export const updateCartItem = async (req, res, next) => {
   try {
     const { quantity } = req.body;
     const { productId } = req.params;
 
-    if (!quantity || quantity < 1) {
+    if (!Number.isInteger(quantity) || quantity < 1) {
       return next(new AppError("Quantity must be at least 1", 400));
     }
 
-    const cart = await Cart.findOne({ user: req.user.id });
-    if (!cart) return next(new AppError("Cart not found", 404));
+   
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
+      return next(new AppError("Invalid product ID", 400));
+    }
 
-    const item = cart.items.find(
-      (item) => item.product.toString() === productId
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const pid = new mongoose.Types.ObjectId(productId);
+
+    const result = await Cart.updateOne(
+      {
+        user: userId,
+        "items.product": pid,
+      },
+      {
+        $set: {
+          "items.$.quantity": quantity,
+        },
+      }
     );
-    if (!item) return next(new AppError("Item not found in cart", 404));
 
-    item.quantity = quantity;
-    cart.totalPrice = calcTotal(cart.items); // ✅
-    await cart.save();
+    if (result.matchedCount === 0) {
+      return next(new AppError("Item not found in cart", 404));
+    }
 
-    await cart.populate("items.product", "title price image category");
-    res.status(200).json({ success: true, data: cart });
+    const [cart] = await Cart.aggregate(getCartPipeline(userId));
+
+   
+    await Cart.updateOne(
+      { user: userId },
+      { $set: { totalPrice: cart.totalPrice } }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: cart,
+    });
   } catch (error) {
     next(error);
   }
 };
+
+
 
 export const removeFromCart = async (req, res, next) => {
   try {
     const { productId } = req.params;
 
-    const cart = await Cart.findOne({ user: req.user.id });
-    if (!cart) return next(new AppError("Cart not found", 404));
+    
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
+      return next(new AppError("Invalid product ID", 400));
+    }
 
-    cart.items = cart.items.filter(
-      (item) => item.product.toString() !== productId
+    const userId = new mongoose.Types.ObjectId(req.user.id);
+    const pid = new mongoose.Types.ObjectId(productId);
+
+    await Cart.updateOne(
+      { user: userId },
+      {
+        $pull: {
+          items: {
+            product: pid,
+          },
+        },
+      }
     );
-    cart.totalPrice = calcTotal(cart.items); // ✅
-    await cart.save();
 
-    await cart.populate("items.product", "title price image category");
-    res.status(200).json({ success: true, data: cart });
+    const [cart] = await Cart.aggregate(getCartPipeline(userId));
+
+    
+    await Cart.updateOne(
+      { user: userId },
+      { $set: { totalPrice: cart ? cart.totalPrice : 0 } }
+    );
+
+    res.status(200).json({
+      success: true,
+      data: cart || {
+        items: [],
+        totalPrice: 0,
+      },
+    });
   } catch (error) {
     next(error);
   }
 };
 
+
+
 export const clearCart = async (req, res, next) => {
   try {
-    const cart = await Cart.findOne({ user: req.user.id });
-    if (!cart) return next(new AppError("Cart not found", 404));
+    
+    const userId = new mongoose.Types.ObjectId(req.user.id);
 
-    cart.items = [];
-    cart.totalPrice = 0; // ✅
-    await cart.save();
+    await Cart.updateOne(
+      { user: userId },
+      {
+        $set: {
+          items: [],
+          totalPrice: 0,
+        },
+      }
+    );
 
-    res.status(200).json({ success: true, message: "Cart cleared", data: cart });
+    res.status(200).json({
+      success: true,
+      message: "Cart cleared",
+      data: {
+        items: [],
+        totalPrice: 0,
+      },
+    });
   } catch (error) {
     next(error);
   }
