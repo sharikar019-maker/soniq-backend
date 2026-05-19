@@ -6,7 +6,9 @@
   "type": "module",
   "scripts": {
     "dev": "nodemon server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+     "seed:admin": "node scripts/seedAdmin.js",
+     "migrate:status": "node scripts/migrateUserStatus.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

@@ -175,7 +175,6 @@ export const addReview = async (req, res, next) => {
     if (!isValidId(req.params.id))
       return next(new AppError("Invalid product ID", 400));
 
-    
     const { rating: userRating, comment } = req.body;
     if (!userRating || !comment)
       return next(new AppError("Rating and comment are required", 400));
@@ -183,7 +182,7 @@ export const addReview = async (req, res, next) => {
     const productId = new mongoose.Types.ObjectId(req.params.id);
     const userId    = new mongoose.Types.ObjectId(req.user.id);
 
-    
+   
     const alreadyReviewed = await Product.findOne({
       _id: productId,
       "reviews.user": userId,
@@ -200,26 +199,11 @@ export const addReview = async (req, res, next) => {
           reviews: {
             user:    userId,
             name:    req.user.name,
-            rating:  Number(userRating), 
+            rating:  Number(userRating),
             comment,
           },
         },
       }
-    );
-
-    const fresh = await Product.findById(productId).select("reviews").lean();
-    const numReviews = fresh.reviews.length;
-    const newRating =
-      numReviews === 0
-        ? 0
-        : Math.round(
-            (fresh.reviews.reduce((sum, r) => sum + r.rating, 0) / numReviews) * 10
-          ) / 10;
-
-    
-    await Product.updateOne(
-      { _id: productId },
-      { $set: { numReviews, rating: newRating } }
     );
 
     
@@ -230,7 +214,7 @@ export const addReview = async (req, res, next) => {
           numReviews: { $size: "$reviews" },
           rating: {
             $cond: {
-              if: { $gt: [{ $size: "$reviews" }, 0] },
+              if:   { $gt: [{ $size: "$reviews" }, 0] },
               then: { $round: [{ $avg: "$reviews.rating" }, 1] },
               else: 0,
             },
@@ -239,8 +223,87 @@ export const addReview = async (req, res, next) => {
       },
     ]);
 
+    if (!product) return next(new AppError("Product not found", 404));
+
+    
+    await Product.updateOne(
+      { _id: productId },
+      { $set: { numReviews: product.numReviews, rating: product.rating } }
+    );
+
     res.status(201).json({ success: true, data: product });
   } catch (error) {
     next(error);
   }
-};
+}; 
+
+
+/*edit review 
+
+export const editReview = async (req, res, next) => {
+  try {
+    if (!isValidId(req.params.id))
+      return next(new AppError("Invalid product ID", 400));
+
+    if (!isValidId(req.params.reviewId))
+      return next(new AppError("Invalid review ID", 400));
+
+    const { rating: userRating, comment } = req.body;
+    if (!userRating || !comment)
+      return next(new AppError("Rating and comment are required", 400));
+
+    if (userRating < 1 || userRating > 5)
+      return next(new AppError("Rating must be between 1 and 5", 400));
+
+    const productId = new mongoose.Types.ObjectId(req.params.id);
+    const reviewId  = new mongoose.Types.ObjectId(req.params.reviewId);
+    const userId    = new mongoose.Types.ObjectId(req.user.id);
+
+   
+    const result = await Product.updateOne(
+      {
+        _id: productId,
+        "reviews._id":  reviewId,
+        "reviews.user": userId,
+      },
+      {
+        $set: {
+          "reviews.$.rating":  Number(userRating),
+          "reviews.$.comment": comment,
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      const exists = await Product.findById(productId).lean();
+      if (!exists) return next(new AppError("Product not found", 404));
+      return next(new AppError("Review not found or not authorized", 403));
+    }
+
+    
+    const [product] = await Product.aggregate([
+      { $match: { _id: productId } },
+      {
+        $addFields: {
+          numReviews: { $size: "$reviews" },
+          rating: {
+            $cond: {
+              if:   { $gt: [{ $size: "$reviews" }, 0] },
+              then: { $round: [{ $avg: "$reviews.rating" }, 1] },
+              else: 0,
+            },
+          },
+        },
+      },
+    ]);
+
+    await Product.updateOne(
+      { _id: productId },
+      { $set: { numReviews: product.numReviews, rating: product.rating } }
+    );
+
+    res.status(200).json({ success: true, data: product });
+  } catch (error) {
+    next(error);
+  }
+};*/

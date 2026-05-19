@@ -10,7 +10,7 @@ const router = express.Router();
 
 router.use(protect); 
 
-router.get("/key", getRazorpayKey);
+router.get("/key", getRazorpayKey);     
 router.post("/create-order", createRazorpayOrder);
 router.post("/verify", verifyPaymentAndCreateOrder);
 

@@ -3,10 +3,9 @@ import Product from "../models/Product.js";
 import AppError from "../utils/AppError.js";
 import mongoose from "mongoose";
 
+
 const getCartPipeline = (userId) => [
-  {
-    $match: { user: userId },
-  },
+  { $match: { user: userId } },
   {
     $lookup: {
       from: "products",
@@ -25,7 +24,6 @@ const getCartPipeline = (userId) => [
             _id: "$$item._id",
             quantity: "$$item.quantity",
             price: "$$item.price",
-
             product: {
               $let: {
                 vars: {
@@ -35,16 +33,13 @@ const getCartPipeline = (userId) => [
                         $filter: {
                           input: "$productDocs",
                           as: "p",
-                          cond: {
-                            $eq: ["$$p._id", "$$item.product"],
-                          },
+                          cond: { $eq: ["$$p._id", "$$item.product"] },
                         },
                       },
                       0,
                     ],
                   },
                 },
-
                 in: {
                   _id: "$$prod._id",
                   title: "$$prod.title",
@@ -57,48 +52,34 @@ const getCartPipeline = (userId) => [
           },
         },
       },
-
+      
       totalPrice: {
         $sum: {
           $map: {
             input: "$items",
             as: "item",
-            in: {
-              $multiply: ["$$item.price", "$$item.quantity"],
-            },
+            in: { $multiply: ["$$item.price", "$$item.quantity"] },
           },
         },
       },
     },
   },
-  {
-    $project: {
-      productDocs: 0,
-    },
-  },
+  { $project: { productDocs: 0 } },
 ];
+
+
+const emptyCart = { items: [], totalPrice: 0 };
 
 
 
 export const getCart = async (req, res, next) => {
   try {
     const userId = new mongoose.Types.ObjectId(req.user.id);
-
     const [cart] = await Cart.aggregate(getCartPipeline(userId));
-
-    if (!cart) {
-      return res.status(200).json({
-        success: true,
-        data: {
-          items: [],
-          totalPrice: 0,
-        },
-      });
-    }
 
     res.status(200).json({
       success: true,
-      data: cart,
+      data: cart || emptyCart,
     });
   } catch (error) {
     next(error);
@@ -109,79 +90,52 @@ export const getCart = async (req, res, next) => {
 
 export const addToCart = async (req, res, next) => {
   try {
-    const { productId, quantity = 1 } = req.body;
-
+    const { productId } = req.body;
     
-    if (!Number.isInteger(quantity) || quantity < 1) {
-      return next(new AppError("Quantity must be at least 1", 400));
-    }
+    const quantity = parseInt(req.body.quantity) || 1;
 
-    if (!mongoose.Types.ObjectId.isValid(productId)) {
+    if (quantity < 1)
+      return next(new AppError("Quantity must be at least 1", 400));
+
+    if (!mongoose.Types.ObjectId.isValid(productId))
       return next(new AppError("Invalid product ID", 400));
-    }
 
     const product = await Product.findById(productId)
       .select("price title image category")
       .lean();
 
-    if (!product) {
+    if (!product)
       return next(new AppError("Product not found", 404));
-    }
 
     const userId = new mongoose.Types.ObjectId(req.user.id);
-    const pid = new mongoose.Types.ObjectId(productId);
+    const pid    = new mongoose.Types.ObjectId(productId);
 
-    const existingItem = await Cart.exists({
-      user: userId,
-      "items.product": pid,
-    });
+    const existingItem = await Cart.exists({ user: userId, "items.product": pid });
 
     if (existingItem) {
+      
       await Cart.updateOne(
-        {
-          user: userId,
-          "items.product": pid,
-        },
-        {
-          $inc: {
-            "items.$.quantity": quantity,
-          },
-        }
+        { user: userId, "items.product": pid },
+        { $inc: { "items.$.quantity": quantity } }
       );
     } else {
+      
       await Cart.findOneAndUpdate(
         { user: userId },
         {
-          $setOnInsert: {
-            user: userId,
-          },
+          $setOnInsert: { user: userId },
           $push: {
-            items: {
-              product: pid,
-              quantity,
-              price: product.price,
-            },
+            items: { product: pid, quantity, price: product.price },
           },
         },
-        {
-          upsert: true,
-          new: true,
-        }
+        { upsert: true, new: true }
       );
     }
 
+    
     const [cart] = await Cart.aggregate(getCartPipeline(userId));
 
-    
-    await Cart.updateOne(
-      { user: userId },
-      { $set: { totalPrice: cart.totalPrice } }
-    );
-
-    res.status(200).json({
-      success: true,
-      data: cart,
-    });
+    res.status(200).json({ success: true, data: cart });
   } catch (error) {
     next(error);
   }
@@ -191,49 +145,30 @@ export const addToCart = async (req, res, next) => {
 
 export const updateCartItem = async (req, res, next) => {
   try {
-    const { quantity } = req.body;
     const { productId } = req.params;
+    const quantity = parseInt(req.body.quantity);
 
-    if (!Number.isInteger(quantity) || quantity < 1) {
+    if (!quantity || quantity < 1)
       return next(new AppError("Quantity must be at least 1", 400));
-    }
 
-   
-    if (!mongoose.Types.ObjectId.isValid(productId)) {
+    if (!mongoose.Types.ObjectId.isValid(productId))
       return next(new AppError("Invalid product ID", 400));
-    }
 
     const userId = new mongoose.Types.ObjectId(req.user.id);
-    const pid = new mongoose.Types.ObjectId(productId);
+    const pid    = new mongoose.Types.ObjectId(productId);
 
     const result = await Cart.updateOne(
-      {
-        user: userId,
-        "items.product": pid,
-      },
-      {
-        $set: {
-          "items.$.quantity": quantity,
-        },
-      }
+      { user: userId, "items.product": pid },
+      { $set: { "items.$.quantity": quantity } }
     );
 
-    if (result.matchedCount === 0) {
+    if (result.matchedCount === 0)
       return next(new AppError("Item not found in cart", 404));
-    }
-
-    const [cart] = await Cart.aggregate(getCartPipeline(userId));
 
    
-    await Cart.updateOne(
-      { user: userId },
-      { $set: { totalPrice: cart.totalPrice } }
-    );
+    const [cart] = await Cart.aggregate(getCartPipeline(userId));
 
-    res.status(200).json({
-      success: true,
-      data: cart,
-    });
+    res.status(200).json({ success: true, data: cart });
   } catch (error) {
     next(error);
   }
@@ -245,39 +180,27 @@ export const removeFromCart = async (req, res, next) => {
   try {
     const { productId } = req.params;
 
-    
-    if (!mongoose.Types.ObjectId.isValid(productId)) {
+    if (!mongoose.Types.ObjectId.isValid(productId))
       return next(new AppError("Invalid product ID", 400));
-    }
 
     const userId = new mongoose.Types.ObjectId(req.user.id);
-    const pid = new mongoose.Types.ObjectId(productId);
-
-    await Cart.updateOne(
-      { user: userId },
-      {
-        $pull: {
-          items: {
-            product: pid,
-          },
-        },
-      }
-    );
-
-    const [cart] = await Cart.aggregate(getCartPipeline(userId));
+    const pid    = new mongoose.Types.ObjectId(productId);
 
     
-    await Cart.updateOne(
+    const result = await Cart.updateOne(
       { user: userId },
-      { $set: { totalPrice: cart ? cart.totalPrice : 0 } }
+      { $pull: { items: { product: pid } } }
     );
+
+    if (result.modifiedCount === 0)
+      return next(new AppError("Item not found in cart", 404));
+
+    
+    const [cart] = await Cart.aggregate(getCartPipeline(userId));
 
     res.status(200).json({
       success: true,
-      data: cart || {
-        items: [],
-        totalPrice: 0,
-      },
+      data: cart || emptyCart,
     });
   } catch (error) {
     next(error);
@@ -288,26 +211,17 @@ export const removeFromCart = async (req, res, next) => {
 
 export const clearCart = async (req, res, next) => {
   try {
-    
     const userId = new mongoose.Types.ObjectId(req.user.id);
 
     await Cart.updateOne(
       { user: userId },
-      {
-        $set: {
-          items: [],
-          totalPrice: 0,
-        },
-      }
+      { $set: { items: [], totalPrice: 0 } }
     );
 
     res.status(200).json({
       success: true,
       message: "Cart cleared",
-      data: {
-        items: [],
-        totalPrice: 0,
-      },
+      data: emptyCart,
     });
   } catch (error) {
     next(error);

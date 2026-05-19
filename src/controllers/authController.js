@@ -109,7 +109,7 @@ export const getMe = async (req, res) => {
 
 export const getAllUsers = async (req, res, next) => {
   try {
-    const page  = parseInt(req.query.page)  || 1;
+    const page = Math.max(parseInt(req.query.page) || 1, 1);
     const limit = parseInt(req.query.limit) || 20;
     const skip  = (page - 1) * limit;
 

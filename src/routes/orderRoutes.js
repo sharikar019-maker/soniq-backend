@@ -11,18 +11,21 @@ import { protect, authorizeAdmin } from "../middleware/authMiddleware.js";
 
 const router = express.Router();
 
-
 router.use(protect);
 
+
 router.route("/")
-  .post(placeOrder)                              
-  .get(authorizeAdmin, getAllOrders);            
+  .post(placeOrder)
+  .get(authorizeAdmin, getAllOrders);
 
-router.get("/my", getMyOrders);                  
 
-router.get("/:id", getOrderById);               
+router.get("/my", getMyOrders);
 
-router.put("/:id/status", authorizeAdmin, updateOrderStatus); 
-router.put("/:id/cancel", cancelOrder);          
+
+router.patch("/:id/status", authorizeAdmin, updateOrderStatus);
+router.patch("/:id/cancel", cancelOrder);
+
+
+router.get("/:id", getOrderById);
 
 export default router;

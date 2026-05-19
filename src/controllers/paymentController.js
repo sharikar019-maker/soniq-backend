@@ -9,20 +9,13 @@ import { buildOrderFromCart } from "./orderController.js";
 
 export const createRazorpayOrder = async (req, res, next) => {
   try {
-    const { amount } = req.body;
-
-    
-    if (!amount || typeof amount !== "number" || amount <= 0)
-      return next(new AppError("Valid amount is required", 400));
-
-    
-    if (!process.env.RAZORPAY_KEY_SECRET)
-      return next(new AppError("Payment configuration error", 500));
+   
+    const cartData = await buildOrderFromCart(req.user.id);
+    if (!cartData) return next(new AppError("Your cart is empty", 400));
 
     const razorpay = getRazorpay();
-
     const razorpayOrder = await razorpay.orders.create({
-      amount:   Math.round(amount * 100), 
+      amount:   Math.round(cartData.totalPrice * 100), 
       currency: "INR",
       receipt:  `receipt_${Date.now()}`,
     });
@@ -40,7 +33,6 @@ export const createRazorpayOrder = async (req, res, next) => {
     next(error);
   }
 };
-
 
 export const verifyPaymentAndCreateOrder = async (req, res, next) => {
   try {

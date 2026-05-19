@@ -20,6 +20,10 @@ router.route("/:id")
   .put(protect, authorizeAdmin, updateProduct)
   .delete(protect, authorizeAdmin, deleteProduct);
 
-router.post("/:id/reviews", protect, addReview); // ← new
+router.post("/:id/reviews", protect, addReview); 
+
+router.post  ("/:id/reviews",            protect, addReview);
+//router.patch ("/:id/reviews/:reviewId",  protect, editReview);    
+
 
 export default router;
