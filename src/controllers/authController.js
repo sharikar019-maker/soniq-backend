@@ -70,10 +70,9 @@ export const refreshAccessToken = async (req, res, next) => {
   
     const hashed = hashToken(incomingToken);
     const user = await User.findOne({
-      refreshToken: hashed,
-      refreshTokenExpiry: { $gt: Date.now() }, 
-    });
-
+    refreshToken: hashed,
+    refreshTokenExpiry: { $gt: Date.now() },
+    }).select("+refreshToken");  
     if (!user) return next(new AppError("Invalid or expired refresh token", 401));
 
     
